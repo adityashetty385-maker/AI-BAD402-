@@ -1,0 +1,248 @@
+import tkinter as tk
+import heapq
+
+# ==========================================
+# 1. ENVIRONMENT CONSTANTS (STATE SPACE)
+# ==========================================
+ROWS = 10
+COLS = 12
+CELL_SIZE = 50
+DEPTH_X = 10  
+DEPTH_Y = 15  
+
+# Sleek 3D Cyberpunk Palette
+C_BG = "#0b0c10"
+C_TILE_TOP = "#1f2833"
+C_TILE_RIGHT = "#151b22"
+C_TILE_BOTTOM = "#0d1115"
+
+C_WALL_TOP = "#45a29e"
+C_WALL_RIGHT = "#2b6b68"
+C_WALL_BOTTOM = "#1b4240"
+
+C_PLAYER = "#66fcf1"
+C_AI = "#ff007f"
+
+class CyberAStarGame:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("A* Containment Protocol - BAD402 Simulator")
+        self.root.configure(bg=C_BG)
+        self.root.resizable(False, False)
+        
+        c_width = (COLS * CELL_SIZE) + (COLS * DEPTH_X) + 60
+        c_height = (ROWS * CELL_SIZE) + (ROWS * DEPTH_Y) + 60
+        
+        self.header = tk.Frame(self.root, bg=C_BG, height=50)
+        self.header.pack(fill="x", pady=(10, 0))
+        self.status_lbl = tk.Label(self.header, text="SYSTEM READY", font=("Helvetica", 16, "bold"), bg=C_BG, fg="#c5c6c7")
+        self.status_lbl.pack()
+
+        self.canvas = tk.Canvas(self.root, width=c_width, height=c_height, bg=C_BG, highlightthickness=0)
+        self.canvas.pack(padx=20, pady=20)
+        
+        self.root.bind("<KeyPress>", self.handle_keypress)
+        
+        self.is_playing = False
+        self.ai_move_job = None
+        self.show_main_menu()
+
+    # ==========================================
+    # 2. 3D GUI & MENU SYSTEM
+    # ==========================================
+    def show_main_menu(self):
+        self.canvas.delete("all")
+        self.is_playing = False
+        
+        # Stop any lingering AI loops in Spyder
+        if self.ai_move_job:
+            self.root.after_cancel(self.ai_move_job)
+            self.ai_move_job = None
+        
+        for i in range(6):
+            self.draw_3d_block(40 + i*70, 60 + i*40, C_TILE_TOP, C_TILE_RIGHT, C_TILE_BOTTOM)
+            
+        self.canvas.create_rectangle(0, 0, 1000, 1000, fill="#0b0c10", stipple="gray50")
+        self.canvas.create_text(COLS*CELL_SIZE//2 + 40, 120, text="A* CONTAINMENT", font=("Impact", 45, "italic"), fill="#c5c6c7")
+        self.canvas.create_text(COLS*CELL_SIZE//2 + 40, 170, text="SELECT AGENT SPEED (DIFFICULTY)", font=("Helvetica", 12, "bold"), fill="#66fcf1")
+
+        btn_y = 230
+        self.btn_easy = tk.Button(self.root, text="EASY (Actuator Speed: 400ms)", font=("Helvetica", 12, "bold"), bg="#2ecc71", fg="black", borderwidth=3, command=lambda: self.start_game(400))
+        self.canvas.create_window(COLS*CELL_SIZE//2 + 40, btn_y, window=self.btn_easy, width=320, height=40)
+        
+        self.btn_med = tk.Button(self.root, text="MEDIUM (Actuator Speed: 250ms)", font=("Helvetica", 12, "bold"), bg="#f39c12", fg="black", borderwidth=3, command=lambda: self.start_game(250))
+        self.canvas.create_window(COLS*CELL_SIZE//2 + 40, btn_y + 60, window=self.btn_med, width=320, height=40)
+        
+        self.btn_hard = tk.Button(self.root, text="HARD (Actuator Speed: 120ms)", font=("Helvetica", 12, "bold"), bg="#e74c3c", fg="black", borderwidth=3, command=lambda: self.start_game(120))
+        self.canvas.create_window(COLS*CELL_SIZE//2 + 40, btn_y + 120, window=self.btn_hard, width=320, height=40)
+
+    def draw_3d_block(self, x, y, top_c, right_c, bot_c):
+        self.canvas.create_polygon(x, y+CELL_SIZE, x+CELL_SIZE, y+CELL_SIZE, x+CELL_SIZE+DEPTH_X, y+CELL_SIZE+DEPTH_Y, x+DEPTH_X, y+CELL_SIZE+DEPTH_Y, fill=bot_c, outline="")
+        self.canvas.create_polygon(x+CELL_SIZE, y, x+CELL_SIZE+DEPTH_X, y+DEPTH_Y, x+CELL_SIZE+DEPTH_X, y+CELL_SIZE+DEPTH_Y, x+CELL_SIZE, y+CELL_SIZE, fill=right_c, outline="")
+        self.canvas.create_rectangle(x, y, x+CELL_SIZE, y+CELL_SIZE, fill=top_c, outline="#2c353f")
+
+    def draw_3d_token(self, x, y, main_color):
+        cx, cy = x + CELL_SIZE//2, y + CELL_SIZE//2
+        r = CELL_SIZE // 3
+        self.canvas.create_oval(cx-r+DEPTH_X, cy-r+DEPTH_Y, cx+r+DEPTH_X, cy+r+DEPTH_Y, fill="#050608", outline="")
+        self.canvas.create_oval(cx-r, cy-r, cx+r, cy+r, fill=main_color, outline="white", width=2)
+
+    def draw_board(self):
+        self.canvas.delete("all")
+        
+        if self.current_ai_path:
+            for pr, pc in self.current_ai_path:
+                x = 30 + (pc * CELL_SIZE) + (pr * DEPTH_X * 0.5)
+                y = 30 + (pr * CELL_SIZE)
+                self.canvas.create_rectangle(x+20, y+20, x+CELL_SIZE-20, y+CELL_SIZE-20, fill="#b30059", outline="")
+
+        for r in range(ROWS):
+            for c in range(COLS):
+                x = 30 + (c * CELL_SIZE) + (r * DEPTH_X * 0.5)
+                y = 30 + (r * CELL_SIZE)
+                
+                if self.grid[r][c] == 0:
+                    self.draw_3d_block(x, y, C_TILE_TOP, C_TILE_RIGHT, C_TILE_BOTTOM)
+                elif self.grid[r][c] == 1:
+                    self.draw_3d_block(x, y, C_WALL_TOP, C_WALL_RIGHT, C_WALL_BOTTOM) 
+                
+                if self.p_pos == (r, c):
+                    self.draw_3d_token(x, y, C_PLAYER)
+                elif self.ai_pos == (r, c):
+                    self.draw_3d_token(x, y, C_AI)
+
+    # ==========================================
+    # 3. GAME STATE & MECHANICS
+    # ==========================================
+    def start_game(self, speed):
+        try:
+            self.btn_easy.destroy(); self.btn_med.destroy(); self.btn_hard.destroy()
+        except: pass
+        
+        self.ai_speed = speed
+        self.grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+        self.p_pos = (ROWS-2, 2)
+        self.last_p_pos = None  # TRACKS POSITION TO DROP WALL BEHIND YOU
+        self.ai_pos = (2, COLS-2)
+        self.current_ai_path = []
+        
+        self.is_playing = True
+        self.status_lbl.config(text="🟢 ARROWS: Move  |  SPACEBAR: Build Wall Behind You", fg=C_PLAYER)
+        
+        self.update_ai_path()
+        self.draw_board()
+        self.ai_action_loop() 
+
+    def handle_keypress(self, event):
+        if not self.is_playing: return
+        key = event.keysym.lower()
+        r, c = self.p_pos
+        old_r, old_c = r, c
+
+        if (key == "up" or key == "w") and r > 0 and self.grid[r-1][c] == 0: r -= 1
+        elif (key == "down" or key == "s") and r < ROWS-1 and self.grid[r+1][c] == 0: r += 1
+        elif (key == "left" or key == "a") and c > 0 and self.grid[r][c-1] == 0: c -= 1
+        elif (key == "right" or key == "d") and c < COLS-1 and self.grid[r][c+1] == 0: c += 1
+        elif key == "space":
+            # BUG FIX: Drops wall on your PREVIOUS position, not your current one
+            if self.last_p_pos:
+                lr, lc = self.last_p_pos
+                if self.grid[lr][lc] == 0 and (lr, lc) != self.ai_pos:
+                    self.grid[lr][lc] = 1 
+                    self.update_ai_path()
+                    self.draw_board()
+            return
+        else: return
+        
+        # If the player successfully moved, update their last position
+        if (r, c) != (old_r, old_c):
+            self.last_p_pos = (old_r, old_c)
+            self.p_pos = (r, c)
+            self.update_ai_path()
+            self.draw_board()
+            self.check_game_over()
+
+    # ==========================================
+    # 4. A* SEARCH ALGORITHM (MODULE 3)
+    # ==========================================
+    def manhattan_distance(self, pos1, pos2):
+        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
+    def get_neighbors(self, pos):
+        r, c = pos
+        neighbors = []
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < ROWS and 0 <= nc < COLS and self.grid[nr][nc] == 0:
+                neighbors.append((nr, nc))
+        return neighbors
+
+    def a_star_search(self, start, target):
+        pq = [(0, 0, start, [])] 
+        visited = set()
+        
+        while pq:
+            _, g, current, path = heapq.heappop(pq)
+            
+            if current == target: 
+                return path + [current]
+                
+            if current in visited: continue
+            visited.add(current)
+            
+            for neighbor in self.get_neighbors(current):
+                if neighbor not in visited:
+                    new_g = g + 1
+                    f = new_g + self.manhattan_distance(neighbor, target)
+                    heapq.heappush(pq, (f, new_g, neighbor, path + [current]))
+        return []
+
+    def update_ai_path(self):
+        self.current_ai_path = self.a_star_search(self.ai_pos, self.p_pos)
+
+    def ai_action_loop(self):
+        if not self.is_playing: return
+        
+        if len(self.current_ai_path) > 1:
+            self.ai_pos = self.current_ai_path[1] 
+            self.update_ai_path()
+            self.draw_board()
+            self.check_game_over()
+        elif not self.current_ai_path:
+            self.trigger_endgame("Player") 
+            return
+
+        if self.is_playing:
+            self.ai_move_job = self.root.after(self.ai_speed, self.ai_action_loop)
+
+    # ==========================================
+    # 5. ENDGAME STATE
+    # ==========================================
+    def check_game_over(self):
+        if self.p_pos == self.ai_pos:
+            self.trigger_endgame("AI")
+
+    def trigger_endgame(self, winner):
+        self.is_playing = False
+        if self.ai_move_job:
+            self.root.after_cancel(self.ai_move_job)
+            self.ai_move_job = None
+            
+        self.canvas.create_rectangle(0, 0, 1000, 1000, fill="#0b0c10", stipple="gray75")
+        
+        if winner == "Player":
+            self.status_lbl.config(text="SYSTEM OVERRIDE", fg=C_PLAYER)
+            self.canvas.create_text(COLS*CELL_SIZE//2 + 40, 200, text="🎉 YOU WIN! 🎉", font=("Impact", 50), fill=C_PLAYER)
+            self.canvas.create_text(COLS*CELL_SIZE//2 + 40, 280, text="A* Search exhausted. The Agent is permanently contained.", font=("Helvetica", 14), fill="white")
+        else:
+            self.status_lbl.config(text="CRITICAL FAILURE", fg=C_AI)
+            self.canvas.create_text(COLS*CELL_SIZE//2 + 40, 200, text="💀 AI CAUGHT YOU! 💀", font=("Impact", 50), fill=C_AI)
+            self.canvas.create_text(COLS*CELL_SIZE//2 + 40, 280, text="The optimal path was executed successfully.", font=("Helvetica", 14), fill="white")
+            
+        btn_restart = tk.Button(self.root, text="RETURN TO MAIN MENU", font=("Helvetica", 14, "bold"), bg="#c5c6c7", fg="black", command=self.show_main_menu)
+        self.canvas.create_window(COLS*CELL_SIZE//2 + 40, 360, window=btn_restart, width=250, height=45)
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = CyberAStarGame(root)
+    root.mainloop()
